@@ -49,7 +49,7 @@ async function askChoice(question, choices) {
   });
   console.log();
 
-  const answer = await ask('Seçiminiz (numara): ');
+  const answer = await ask('Seciminiz (numara): ');
   const index = parseInt(answer) - 1;
 
   if (index >= 0 && index < choices.length) {
@@ -67,6 +67,15 @@ function runCommand(cmd, cwd = process.cwd()) {
   }
 }
 
+function runCommandSilent(cmd) {
+  try {
+    execSync(cmd, { stdio: 'pipe' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function checkNodeInstalled() {
   try {
     execSync('node --version', { stdio: 'pipe' });
@@ -76,13 +85,43 @@ function checkNodeInstalled() {
   }
 }
 
-function checkMongoInstalled() {
+// Yonetici kontrolu
+function isAdmin() {
   try {
-    execSync('mongod --version', { stdio: 'pipe' });
+    execSync('net session', { stdio: 'pipe' });
     return true;
   } catch {
     return false;
   }
+}
+
+// Firewall port acma (Windows)
+function openFirewallPort(port, name) {
+  try {
+    // Once mevcut kurali sil (varsa)
+    try {
+      execSync(`netsh advfirewall firewall delete rule name="${name}"`, { stdio: 'pipe' });
+    } catch {}
+
+    // Yeni kural ekle (TCP Inbound)
+    execSync(
+      `netsh advfirewall firewall add rule name="${name}" dir=in action=allow protocol=tcp localport=${port}`,
+      { stdio: 'pipe' }
+    );
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// Secret olustur
+function generateSecret(length) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let result = '';
+  for (let i = 0; i < length; i++) {
+    result += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return result;
 }
 
 // ==================== ANA SUNUCU KURULUMU ====================
@@ -95,13 +134,13 @@ async function setupMainServer() {
   const config = {};
 
   // Port
-  config.port = await askWithDefault('Backend port numarası', '3000');
+  config.port = await askWithDefault('Backend port numarasi', '3000');
 
   // MongoDB
-  log('\nMongoDB Ayarları:', 'yellow');
-  const mongoChoice = await askChoice('MongoDB bağlantısı:', [
+  log('\nMongoDB Ayarlari:', 'yellow');
+  const mongoChoice = await askChoice('MongoDB baglantisi:', [
     { value: 'local', label: 'Yerel MongoDB', desc: 'localhost:27017' },
-    { value: 'remote', label: 'Uzak MongoDB', desc: 'MongoDB Atlas veya başka sunucu' },
+    { value: 'remote', label: 'Uzak MongoDB', desc: 'MongoDB Atlas veya baska sunucu' },
     { value: 'skip', label: 'MongoDB kullanma', desc: 'Sadece in-memory (veriler kaybolur)' }
   ]);
 
@@ -115,40 +154,48 @@ async function setupMainServer() {
 
   // JWT Secret
   config.jwtSecret = generateSecret(32);
-  log(`\nJWT Secret otomatik oluşturuldu`, 'green');
+  log(`\nJWT Secret otomatik olusturuldu`, 'green');
 
   // Agent Secret
-  config.agentSecret = await askWithDefault('Agent Secret (tüm agent\'lar bu değeri kullanacak)', generateSecret(16));
+  config.agentSecret = await askWithDefault('Agent Secret (tum agentlar bu degeri kullanacak)', generateSecret(16));
 
   // WhatsApp
-  log('\nWhatsApp Bot Ayarları:', 'yellow');
+  log('\nWhatsApp Bot Ayarlari:', 'yellow');
   const enableWhatsapp = await askChoice('WhatsApp bot aktif olsun mu?', [
     { value: true, label: 'Evet', desc: 'Bildirim ve komut alabilirsiniz' },
-    { value: false, label: 'Hayır', desc: 'Sadece web dashboard kullanılacak' }
+    { value: false, label: 'Hayir', desc: 'Sadece web dashboard kullanilacak' }
   ]);
 
   config.whatsappEnabled = enableWhatsapp;
 
   if (enableWhatsapp) {
-    log('\nWhatsApp admin numaralarını girin (ülke kodu ile, virgülle ayırın)', 'bright');
-    log('Örnek: 905551234567,905559876543', 'bright');
-    config.adminNumbers = await ask('Admin numaraları: ');
+    log('\nWhatsApp admin numaralarini girin (ulke kodu ile, virgulle ayirin)', 'bright');
+    log('Ornek: 905551234567,905559876543', 'bright');
+    config.adminNumbers = await ask('Admin numaralari: ');
   }
 
   // Dashboard port
-  config.dashboardPort = await askWithDefault('Dashboard port numarası', '5173');
+  config.dashboardPort = await askWithDefault('Dashboard port numarasi', '5173');
 
-  // Özet göster
+  // Firewall
+  log('\nFirewall Ayarlari:', 'yellow');
+  config.openFirewall = await askChoice('Firewall portlarini otomatik ac?', [
+    { value: true, label: 'Evet (Onerilen)', desc: 'Backend ve Dashboard portlari acilir - Yonetici gerekli' },
+    { value: false, label: 'Hayir', desc: 'Manuel acacagim' }
+  ]);
+
+  // Ozet goster
   log('\n========================================', 'blue');
-  log('   KURULUM ÖZETİ', 'blue');
+  log('   KURULUM OZETI', 'blue');
   log('========================================', 'blue');
   log(`Backend Port: ${config.port}`, 'bright');
   log(`Dashboard Port: ${config.dashboardPort}`, 'bright');
-  log(`MongoDB: ${config.mongoUri || 'Kullanılmıyor'}`, 'bright');
+  log(`MongoDB: ${config.mongoUri || 'Kullanilmiyor'}`, 'bright');
   log(`Agent Secret: ${config.agentSecret}`, 'bright');
   log(`WhatsApp: ${config.whatsappEnabled ? 'Aktif' : 'Pasif'}`, 'bright');
+  log(`Firewall: ${config.openFirewall ? 'Otomatik acilacak' : 'Manuel'}`, 'bright');
   if (config.whatsappEnabled) {
-    log(`Admin Numaraları: ${config.adminNumbers}`, 'bright');
+    log(`Admin Numaralari: ${config.adminNumbers}`, 'bright');
   }
 
   const confirm = await ask('\nKuruluma devam edilsin mi? (e/h): ');
@@ -157,8 +204,8 @@ async function setupMainServer() {
     return;
   }
 
-  // Backend .env oluştur
-  log('\n[1/4] Backend .env dosyası oluşturuluyor...', 'yellow');
+  // Backend .env olustur
+  log('\n[1/5] Backend .env dosyasi olusturuluyor...', 'yellow');
   const backendEnv = `# Server Manager Backend
 PORT=${config.port}
 NODE_ENV=production
@@ -169,7 +216,7 @@ FRONTEND_URL=http://localhost:${config.dashboardPort}
 # MongoDB
 MONGODB_URI=${config.mongoUri}
 
-# Güvenlik
+# Guvenlik
 JWT_SECRET=${config.jwtSecret}
 AGENT_SECRET=${config.agentSecret}
 
@@ -183,26 +230,26 @@ LOG_LEVEL=info
 `;
 
   fs.writeFileSync(path.join(__dirname, 'backend', '.env'), backendEnv);
-  log('Backend .env oluşturuldu!', 'green');
+  log('Backend .env olusturuldu!', 'green');
 
   // Backend npm install
-  log('\n[2/4] Backend bağımlılıkları yükleniyor...', 'yellow');
+  log('\n[2/5] Backend bagimliliklari yukleniyor...', 'yellow');
   if (!runCommand('npm install', path.join(__dirname, 'backend'))) {
-    log('Backend bağımlılıkları yüklenemedi!', 'red');
+    log('Backend bagimliliklari yuklenemedi!', 'red');
     return;
   }
-  log('Backend bağımlılıkları yüklendi!', 'green');
+  log('Backend bagimliliklari yuklendi!', 'green');
 
   // Dashboard npm install
-  log('\n[3/4] Dashboard bağımlılıkları yükleniyor...', 'yellow');
+  log('\n[3/5] Dashboard bagimliliklari yukleniyor...', 'yellow');
   if (!runCommand('npm install', path.join(__dirname, 'dashboard'))) {
-    log('Dashboard bağımlılıkları yüklenemedi!', 'red');
+    log('Dashboard bagimliliklari yuklenemedi!', 'red');
     return;
   }
-  log('Dashboard bağımlılıkları yüklendi!', 'green');
+  log('Dashboard bagimliliklari yuklendi!', 'green');
 
-  // Vite config güncelle
-  log('\n[4/4] Dashboard yapılandırılıyor...', 'yellow');
+  // Vite config guncelle
+  log('\n[4/5] Dashboard yapilandiriliyor...', 'yellow');
   const viteConfig = `import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
@@ -210,6 +257,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: ${config.dashboardPort},
+    host: '0.0.0.0',
     proxy: {
       '/api': {
         target: 'http://localhost:${config.port}',
@@ -224,63 +272,89 @@ export default defineConfig({
 })
 `;
   fs.writeFileSync(path.join(__dirname, 'dashboard', 'vite.config.js'), viteConfig);
-  log('Dashboard yapılandırıldı!', 'green');
+  log('Dashboard yapilandirildi!', 'green');
 
-  // Başlatma scriptleri oluştur
+  // Firewall portlarini ac
+  log('\n[5/5] Firewall ayarlari yapiliyor...', 'yellow');
+  if (config.openFirewall) {
+    if (!isAdmin()) {
+      log('UYARI: Yonetici haklari yok! Firewall kurallari eklenemedi.', 'red');
+      log('Manuel acmak icin yonetici olarak calistirin:', 'yellow');
+      log(`  netsh advfirewall firewall add rule name="ServerManager-Backend" dir=in action=allow protocol=tcp localport=${config.port}`, 'cyan');
+      log(`  netsh advfirewall firewall add rule name="ServerManager-Dashboard" dir=in action=allow protocol=tcp localport=${config.dashboardPort}`, 'cyan');
+    } else {
+      const backendResult = openFirewallPort(config.port, 'ServerManager-Backend');
+      const dashboardResult = openFirewallPort(config.dashboardPort, 'ServerManager-Dashboard');
+
+      if (backendResult && dashboardResult) {
+        log('Firewall portlari acildi!', 'green');
+        log(`  - Port ${config.port} (Backend)`, 'green');
+        log(`  - Port ${config.dashboardPort} (Dashboard)`, 'green');
+      } else {
+        log('Bazi firewall kurallari eklenemedi. Manuel kontrol edin.', 'yellow');
+      }
+    }
+  } else {
+    log('Firewall ayarlari atlanildi.', 'yellow');
+  }
+
+  // Baslatma scriptleri olustur
   createStartScripts(config);
 
   log('\n========================================', 'green');
   log('   KURULUM TAMAMLANDI!', 'green');
   log('========================================\n', 'green');
 
-  log('Başlatmak için:', 'bright');
-  log('  1. start-backend.bat   (Backend\'i başlatır)', 'cyan');
-  log('  2. start-dashboard.bat (Dashboard\'u başlatır)', 'cyan');
+  log('Baslatmak icin:', 'bright');
+  log('  1. start-backend.bat   (Backendi baslatir)', 'cyan');
+  log('  2. start-dashboard.bat (Dashboardu baslatir)', 'cyan');
   log('  veya', 'bright');
-  log('  start-all.bat          (Her ikisini de başlatır)\n', 'cyan');
+  log('  start-all.bat          (Her ikisini de baslatir)\n', 'cyan');
 
   log('Dashboard adresi: http://localhost:' + config.dashboardPort, 'yellow');
-  log('Varsayılan giriş: admin / admin123\n', 'yellow');
+  log('Varsayilan giris: admin / admin123\n', 'yellow');
 
-  log('Agent\'ları kurmak için bu scripti agent kurulacak sunucuya kopyalayın', 'bright');
-  log('ve "node setup.js" komutunu çalıştırın.\n', 'bright');
+  log('Agentlari kurmak icin bu scripti agent kurulacak sunucuya kopyalayin', 'bright');
+  log('ve "node setup.js" komutunu calistirin.\n', 'bright');
 
-  log(`\n${colors.red}ÖNEMLİ: Agent Secret'ı not edin: ${config.agentSecret}${colors.reset}`, 'red');
-  log('Bu değeri agent kurulumlarında kullanacaksınız.\n', 'red');
+  log(`\n${colors.red}ONEMLI: Agent Secreti not edin: ${config.agentSecret}${colors.reset}`, 'red');
+  log('Bu degeri agent kurulumlarinda kullanacaksiniz.\n', 'red');
+
+  return config;
 }
 
 // ==================== AGENT KURULUMU ====================
 
 async function setupAgent() {
   log('\n========================================', 'green');
-  log('   AGENT KURULUMU (Yönetilecek Sunucu)', 'green');
+  log('   AGENT KURULUMU (Yonetilecek Sunucu)', 'green');
   log('========================================\n', 'green');
 
   const config = {};
 
   // Server URL
-  log('Ana sunucunun adresi (Backend çalışan sunucu)', 'bright');
-  config.serverUrl = await ask('Server URL (örn: http://192.168.1.100:3000): ');
+  log('Ana sunucunun adresi (Backend calisan sunucu)', 'bright');
+  config.serverUrl = await ask('Server URL (orn: http://192.168.1.100:3000): ');
 
   // Agent bilgileri
-  log('\nBu sunucunun kimliği:', 'yellow');
+  log('\nBu sunucunun kimligi:', 'yellow');
   config.agentId = await askWithDefault('Agent ID (benzersiz)', `server-${Date.now().toString(36)}`);
-  config.agentName = await askWithDefault('Agent Adı (görünen isim)', config.agentId);
+  config.agentName = await askWithDefault('Agent Adi (gorunen isim)', config.agentId);
 
   // Secret
   config.agentSecret = await ask('Agent Secret (ana sunucu kurulumunda verilen): ');
 
-  // Uygulama ayarları
-  log('\nYönetilecek .NET Uygulaması:', 'yellow');
-  config.appName = await askWithDefault('Uygulama adı', 'MyApp');
-  config.appPath = await ask('Uygulama yolu (örn: C:\\MyApp\\app.exe): ');
-  config.appWorkingDir = await askWithDefault('Çalışma dizini', path.dirname(config.appPath));
+  // Uygulama ayarlari
+  log('\nYonetilecek .NET Uygulamasi:', 'yellow');
+  config.appName = await askWithDefault('Uygulama adi', 'MyApp');
+  config.appPath = await ask('Uygulama yolu (orn: C:\\MyApp\\app.exe): ');
+  config.appWorkingDir = await askWithDefault('Calisma dizini', path.dirname(config.appPath || 'C:\\'));
 
-  // WPP Connect ayarları
-  log('\nWPP Connect Ayarları:', 'yellow');
-  const hasWpp = await askChoice('Bu sunucuda WPP Connect var mı?', [
+  // WPP Connect ayarlari
+  log('\nWPP Connect Ayarlari:', 'yellow');
+  const hasWpp = await askChoice('Bu sunucuda WPP Connect var mi?', [
     { value: true, label: 'Evet' },
-    { value: false, label: 'Hayır' }
+    { value: false, label: 'Hayir' }
   ]);
 
   if (hasWpp) {
@@ -291,15 +365,31 @@ async function setupAgent() {
     config.wppPath = '';
   }
 
-  // Özet
+  // Firewall (Agent icin gerekmez ama soralim)
+  log('\nFirewall Ayarlari:', 'yellow');
+  log('NOT: Agent disari port acmaz, sadece merkeze baglanir.', 'bright');
+  log('Ama uygulamaniz icin port acmak isterseniz:', 'bright');
+  config.openAppFirewall = await askChoice('Uygulama icin firewall portu ac?', [
+    { value: false, label: 'Hayir', desc: 'Port acmaya gerek yok' },
+    { value: true, label: 'Evet', desc: 'Belirli bir portu ac' }
+  ]);
+
+  if (config.openAppFirewall) {
+    config.appPort = await ask('Acilacak port numarasi: ');
+  }
+
+  // Ozet
   log('\n========================================', 'blue');
-  log('   KURULUM ÖZETİ', 'blue');
+  log('   KURULUM OZETI', 'blue');
   log('========================================', 'blue');
   log(`Server URL: ${config.serverUrl}`, 'bright');
   log(`Agent ID: ${config.agentId}`, 'bright');
-  log(`Agent Adı: ${config.agentName}`, 'bright');
+  log(`Agent Adi: ${config.agentName}`, 'bright');
   log(`Uygulama: ${config.appPath}`, 'bright');
   log(`WPP Connect: ${hasWpp ? config.wppHealthUrl : 'Yok'}`, 'bright');
+  if (config.openAppFirewall) {
+    log(`Firewall Port: ${config.appPort}`, 'bright');
+  }
 
   const confirm = await ask('\nKuruluma devam edilsin mi? (e/h): ');
   if (confirm.toLowerCase() !== 'e') {
@@ -307,49 +397,67 @@ async function setupAgent() {
     return;
   }
 
-  // Agent .env oluştur
-  log('\n[1/3] Agent .env dosyası oluşturuluyor...', 'yellow');
+  // Agent .env olustur
+  log('\n[1/4] Agent .env dosyasi olusturuluyor...', 'yellow');
   const agentEnv = `# Server Manager Agent
-# Bu sunucunun ayarları
+# Bu sunucunun ayarlari
 
-# Merkez Sunucu Bağlantısı
+# Merkez Sunucu Baglantisi
 SERVER_URL=${config.serverUrl}
 
-# Agent Kimliği
+# Agent Kimligi
 AGENT_ID=${config.agentId}
 AGENT_NAME=${config.agentName}
 AGENT_SECRET=${config.agentSecret}
 
-# Yönetilecek .NET Uygulaması
+# Yonetilecek .NET Uygulamasi
 APP_NAME=${config.appName}
 APP_PATH=${config.appPath}
 APP_WORKING_DIR=${config.appWorkingDir}
 
-# WPP Connect Ayarları
+# WPP Connect Ayarlari
 WPP_HEALTH_URL=${config.wppHealthUrl}
 WPP_PATH=${config.wppPath}
 WPP_PROCESS_NAME=node
 
-# Log Ayarları
+# Log Ayarlari
 LOG_LEVEL=info
 LOG_PATH=./logs
 `;
 
   fs.writeFileSync(path.join(__dirname, 'agent', '.env'), agentEnv);
-  log('Agent .env oluşturuldu!', 'green');
+  log('Agent .env olusturuldu!', 'green');
 
   // npm install
-  log('\n[2/3] Agent bağımlılıkları yükleniyor...', 'yellow');
+  log('\n[2/4] Agent bagimliliklari yukleniyor...', 'yellow');
   if (!runCommand('npm install', path.join(__dirname, 'agent'))) {
-    log('Agent bağımlılıkları yüklenemedi!', 'red');
+    log('Agent bagimliliklari yuklenemedi!', 'red');
     return;
   }
-  log('Agent bağımlılıkları yüklendi!', 'green');
+  log('Agent bagimliliklari yuklendi!', 'green');
 
-  // Başlatma scriptleri
-  log('\n[3/3] Başlatma scriptleri oluşturuluyor...', 'yellow');
+  // Baslatma scriptleri
+  log('\n[3/4] Baslatma scriptleri olusturuluyor...', 'yellow');
   createAgentScripts(config);
-  log('Scriptler oluşturuldu!', 'green');
+  log('Scriptler olusturuldu!', 'green');
+
+  // Firewall
+  log('\n[4/4] Firewall ayarlari yapiliyor...', 'yellow');
+  if (config.openAppFirewall && config.appPort) {
+    if (!isAdmin()) {
+      log('UYARI: Yonetici haklari yok! Firewall kurali eklenemedi.', 'red');
+      log('Manuel acmak icin:', 'yellow');
+      log(`  netsh advfirewall firewall add rule name="ServerManager-App-${config.agentId}" dir=in action=allow protocol=tcp localport=${config.appPort}`, 'cyan');
+    } else {
+      if (openFirewallPort(config.appPort, `ServerManager-App-${config.agentId}`)) {
+        log(`Firewall portu acildi: ${config.appPort}`, 'green');
+      } else {
+        log('Firewall kurali eklenemedi.', 'yellow');
+      }
+    }
+  } else {
+    log('Firewall ayarlari atlanildi.', 'yellow');
+  }
 
   log('\n========================================', 'green');
   log('   KURULUM TAMAMLANDI!', 'green');
@@ -357,85 +465,103 @@ LOG_PATH=./logs
 
   // Windows Service kurulumu
   const installService = await askChoice('Windows Service olarak kurmak ister misiniz?', [
-    { value: true, label: 'Evet', desc: 'Sunucu açıldığında otomatik başlar (Yönetici gerekli)' },
-    { value: false, label: 'Hayır', desc: 'Manuel başlatacağım' }
+    { value: true, label: 'Evet', desc: 'Sunucu acildiginda otomatik baslar (Yonetici gerekli)' },
+    { value: false, label: 'Hayir', desc: 'Manuel baslatacagim' }
   ]);
 
   if (installService) {
     log('\nWindows Service kuruluyor...', 'yellow');
-    log('NOT: Bu işlem yönetici hakları gerektirir!\n', 'red');
+    log('NOT: Bu islem yonetici haklari gerektirir!\n', 'red');
 
     if (runCommand('npm run install-service', path.join(__dirname, 'agent'))) {
-      log('Windows Service kuruldu ve başlatıldı!', 'green');
+      log('Windows Service kuruldu ve baslatildi!', 'green');
     } else {
-      log('Service kurulumu başarısız. Manuel kurmak için:', 'red');
-      log('  1. Komut istemini yönetici olarak açın', 'yellow');
+      log('Service kurulumu basarisiz. Manuel kurmak icin:', 'red');
+      log('  1. Komut istemini yonetici olarak acin', 'yellow');
       log('  2. cd ' + path.join(__dirname, 'agent'), 'yellow');
       log('  3. npm run install-service', 'yellow');
     }
   } else {
-    log('\nAgent\'ı manuel başlatmak için:', 'bright');
+    log('\nAgenti manuel baslatmak icin:', 'bright');
     log('  start-agent.bat', 'cyan');
     log('veya', 'bright');
     log('  cd agent && npm start', 'cyan');
   }
 
-  log('\nAgent durumunu kontrol etmek için Dashboard\'u açın.', 'bright');
+  log('\nAgent durumunu kontrol etmek icin Dashboardu acin.', 'bright');
 }
 
-// ==================== YARDIMCI FONKSİYONLAR ====================
-
-function generateSecret(length) {
-  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-  let result = '';
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
-}
+// ==================== YARDIMCI FONKSIYONLAR ====================
 
 function createStartScripts(config) {
-  // Backend başlatma
+  // Backend baslatma
   const backendBat = `@echo off
+chcp 65001 > nul
 title Server Manager - Backend
 cd /d "%~dp0backend"
-echo Starting Backend on port ${config.port}...
+echo.
+echo  ========================================
+echo    SERVER MANAGER - BACKEND
+echo    Port: ${config.port}
+echo  ========================================
+echo.
 npm start
 pause
 `;
   fs.writeFileSync(path.join(__dirname, 'start-backend.bat'), backendBat);
 
-  // Dashboard başlatma
+  // Dashboard baslatma
   const dashboardBat = `@echo off
+chcp 65001 > nul
 title Server Manager - Dashboard
 cd /d "%~dp0dashboard"
-echo Starting Dashboard on port ${config.dashboardPort}...
+echo.
+echo  ========================================
+echo    SERVER MANAGER - DASHBOARD
+echo    Port: ${config.dashboardPort}
+echo  ========================================
+echo.
 npm run dev
 pause
 `;
   fs.writeFileSync(path.join(__dirname, 'start-dashboard.bat'), dashboardBat);
 
-  // Her ikisini başlat
+  // Her ikisini baslat
   const allBat = `@echo off
-echo Starting Server Manager...
+chcp 65001 > nul
+echo.
+echo  ========================================
+echo    SERVER MANAGER BASLATILIYOR
+echo  ========================================
+echo.
 start "Backend" cmd /c "%~dp0start-backend.bat"
 timeout /t 3 /nobreak > nul
 start "Dashboard" cmd /c "%~dp0start-dashboard.bat"
 echo.
-echo Backend: http://localhost:${config.port}
-echo Dashboard: http://localhost:${config.dashboardPort}
+echo  Backend:   http://localhost:${config.port}
+echo  Dashboard: http://localhost:${config.dashboardPort}
 echo.
-echo Varsayilan giris: admin / admin123
+echo  Varsayilan giris: admin / admin123
+echo.
+echo  Bu pencereyi kapatabilirsiniz.
+pause
 `;
   fs.writeFileSync(path.join(__dirname, 'start-all.bat'), allBat);
 }
 
 function createAgentScripts(config) {
   const agentBat = `@echo off
+chcp 65001 > nul
 title Server Manager Agent - ${config.agentName}
 cd /d "%~dp0agent"
-echo Starting Agent: ${config.agentName} (${config.agentId})
-echo Connecting to: ${config.serverUrl}
+echo.
+echo  ========================================
+echo    SERVER MANAGER AGENT
+echo    ID: ${config.agentId}
+echo    Name: ${config.agentName}
+echo    Server: ${config.serverUrl}
+echo  ========================================
+echo.
 npm start
 pause
 `;
@@ -446,35 +572,44 @@ pause
 
 async function main() {
   console.clear();
-  log('╔════════════════════════════════════════════╗', 'green');
-  log('║                                            ║', 'green');
-  log('║      SERVER MANAGER KURULUM SIHIRBAZI      ║', 'green');
-  log('║                                            ║', 'green');
-  log('╚════════════════════════════════════════════╝', 'green');
+  log('', 'green');
+  log('  ╔════════════════════════════════════════════╗', 'green');
+  log('  ║                                            ║', 'green');
+  log('  ║      SERVER MANAGER KURULUM SIHIRBAZI      ║', 'green');
+  log('  ║                                            ║', 'green');
+  log('  ╚════════════════════════════════════════════╝', 'green');
 
-  // Node.js kontrolü
+  // Node.js kontrolu
   if (!checkNodeInstalled()) {
-    log('\nHATA: Node.js bulunamadı!', 'red');
-    log('Lütfen Node.js kurun: https://nodejs.org', 'yellow');
+    log('\nHATA: Node.js bulunamadi!', 'red');
+    log('Lutfen Node.js kurun: https://nodejs.org', 'yellow');
     rl.close();
     return;
+  }
+
+  // Yonetici kontrolu
+  if (isAdmin()) {
+    log('\n[OK] Yonetici olarak calistiriliyor', 'green');
+  } else {
+    log('\n[!] Normal kullanici olarak calistiriliyor', 'yellow');
+    log('    Firewall ve Service islemleri icin yonetici gerekli', 'yellow');
   }
 
   const choice = await askChoice('Ne kurmak istiyorsunuz?', [
     {
       value: 'main',
       label: 'Ana Sunucu (Backend + Dashboard)',
-      desc: 'Merkez yönetim sunucusu - tüm agent\'ları yönetir'
+      desc: 'Merkez yonetim sunucusu - tum agentlari yonetir'
     },
     {
       value: 'agent',
-      label: 'Agent (Yönetilecek Sunucu)',
-      desc: 'Bu sunucuyu uzaktan yönetmek için agent kur'
+      label: 'Agent (Yonetilecek Sunucu)',
+      desc: 'Bu sunucuyu uzaktan yonetmek icin agent kur'
     },
     {
       value: 'both',
-      label: 'Her İkisi',
-      desc: 'Bu sunucu hem merkez hem de yönetilecek olacak'
+      label: 'Her Ikisi',
+      desc: 'Bu sunucu hem merkez hem de yonetilecek olacak'
     }
   ]);
 
@@ -483,8 +618,8 @@ async function main() {
   } else if (choice === 'agent') {
     await setupAgent();
   } else if (choice === 'both') {
-    await setupMainServer();
-    log('\n\nŞimdi agent kurulumuna geçiliyor...\n', 'yellow');
+    const mainConfig = await setupMainServer();
+    log('\n\nSimdi agent kurulumuna geciliyor...\n', 'yellow');
     await setupAgent();
   }
 
